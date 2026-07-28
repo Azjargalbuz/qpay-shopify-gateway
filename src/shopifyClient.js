@@ -114,7 +114,43 @@ export class ShopifyClient {
     return rows;
   }
 
-  async createPendingOrder({
+  async addPaymentUrlToDraftOrder({ draftOrder, paymentUrl }) {
+    if (!this.isConfigured()) {
+      return { skipped: true, reason: "Shopify Admin API credentials are not configured" };
+    }
+
+    const note = appendPaymentUrlToNote(draftOrder.note, paymentUrl);
+    const noteAttributes = Array.isArray(draftOrder.note_attributes) ? draftOrder.note_attributes : [];
+    const nextNoteAttributes = upsertNoteAttribute(noteAttributes, "QPay payment URL", paymentUrl);
+
+    return this.request(`/draft_orders/${draftOrder.id}.json`, {
+      method: "PUT",
+      body: {
+        draft_order: {
+          id: draftOrder.id,
+          note,
+          note_attributes: nextNoteAttributes,
+          tags: appendTag(draftOrder.tags, "qpay-pending")
+        }
+      }
+    });
+  }
+
+  async completeDraftOrder({ draftOrderId, paymentPending = false }) {
+    if (!this.isConfigured()) {
+      throw new Error("Shopify Admin API credentials are not configured");
+    }
+
+    const query = paymentPending ? "?payment_pending=true" : "";
+    const data = await this.request(`/draft_orders/${draftOrderId}/complete.json${query}`, {
+      method: "PUT",
+      body: {}
+    });
+
+    return data.draft_order;
+  }
+
+  async createDraftOrder({
     email,
     phone,
     shippingAddress,
@@ -130,23 +166,18 @@ export class ShopifyClient {
       variant_id: Number(item.variantId),
       quantity: Number(item.quantity || 1)
     }));
-    const tags = "qpay-pending, custom-checkout";
+    const tags = "qpay-draft, custom-checkout";
 
-    const orderData = await this.request("/orders.json", {
+    const draftOrderData = await this.request("/draft_orders.json", {
       method: "POST",
       body: {
-        order: {
+        draft_order: {
           email,
-          phone,
           line_items: lineItems,
           shipping_address: shippingAddress,
           billing_address: shippingAddress,
-          financial_status: "pending",
-          gateway: "QPay",
-          note: "QPay payment pending",
+          note: `QPay payment pending${phone ? `\nPhone: ${phone}` : ""}`,
           tags,
-          send_receipt: false,
-          send_fulfillment_receipt: false,
           shipping_lines: Number(shippingPrice) > 0
             ? [{ title: shippingTitle, price: String(shippingPrice), code: "CUSTOM_DELIVERY" }]
             : []
@@ -154,7 +185,7 @@ export class ShopifyClient {
       }
     });
 
-    return orderData.order;
+    return draftOrderData.draft_order;
   }
 
   async request(path, { method = "GET", body } = {}) {

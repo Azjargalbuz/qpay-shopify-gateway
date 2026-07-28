@@ -124,7 +124,13 @@ Example:
 https://qpay-shopify-gateway.onrender.com/checkout?items=123456789:1,987654321:2
 ```
 
-The checkout page creates a pending Shopify order, creates a QPay invoice, stores the payment URL on the Shopify order, and redirects the customer to the QPay QR page.
+The checkout page creates a Shopify draft order, creates a QPay invoice, stores the payment URL on the draft order, and redirects the customer to the QPay QR page. When QPay reports the invoice as paid, the service completes the draft order and creates the real paid Shopify order.
+
+Required Shopify app scopes for custom checkout:
+
+```text
+read_orders,write_orders,read_products,read_draft_orders,write_draft_orders
+```
 
 Set shipping defaults in Render:
 

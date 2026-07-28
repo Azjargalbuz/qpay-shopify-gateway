@@ -65,7 +65,7 @@ async function route(req, res, body, rawBody) {
     const subtotal = sum(subtotalItems.map((item) => item.linePrice));
     const shippingPrice = getCustomCheckoutShippingPrice(subtotal);
 
-    const shopifyOrder = await getShopify().createPendingOrder({
+    const draftOrder = await getShopify().createDraftOrder({
       email: body.customer?.email,
       phone: body.customer?.phone,
       shippingAddress: body.shippingAddress,
@@ -74,12 +74,12 @@ async function route(req, res, body, rawBody) {
       shippingTitle: process.env.CUSTOM_CHECKOUT_SHIPPING_TITLE || "Delivery"
     });
 
-    const orderId = String(shopifyOrder.name || shopifyOrder.order_number || shopifyOrder.id);
-    const amount = Number(shopifyOrder.total_price || subtotal + shippingPrice);
+    const orderId = String(draftOrder.name || draftOrder.id);
+    const amount = Number(draftOrder.total_price || subtotal + shippingPrice);
     const invoice = await getQPay().createInvoice({
       senderInvoiceNo: orderId,
       amount,
-      description: `${orderId} custom checkout payment`,
+      description: `${orderId} custom checkout draft payment`,
       receiverCode: "terminal",
       callbackUrl: process.env.QPAY_CALLBACK_URL
     });
@@ -94,22 +94,22 @@ async function route(req, res, body, rawBody) {
       qrText: invoice.qr_text,
       qrImage: invoice.qr_image,
       urls: invoice.urls ?? [],
-      shopifyOrderId: shopifyOrder.id,
-      shopifyOrderName: shopifyOrder.name,
-      shopifyTags: shopifyOrder.tags,
-      currency: shopifyOrder.currency || "MNT",
+      shopifyDraftOrderId: draftOrder.id,
+      shopifyDraftOrderName: draftOrder.name,
+      shopifyTags: draftOrder.tags,
+      currency: draftOrder.currency || "MNT",
       source: "custom-checkout",
       createdAt: new Date().toISOString()
     });
     saveInvoices(invoices);
 
-    await getShopify().addPaymentUrlToOrder({
-      order: shopifyOrder,
+    await getShopify().addPaymentUrlToDraftOrder({
+      draftOrder,
       paymentUrl
     });
 
-    console.log("Custom checkout order created", {
-      shopifyOrderId: shopifyOrder.id,
+    console.log("Custom checkout draft order created", {
+      shopifyDraftOrderId: draftOrder.id,
       orderId,
       amount,
       invoiceId: invoice.invoice_id,
@@ -119,7 +119,7 @@ async function route(req, res, body, rawBody) {
     sendJson(res, 201, {
       ok: true,
       orderId,
-      shopifyOrderId: shopifyOrder.id,
+      shopifyDraftOrderId: draftOrder.id,
       invoiceId: invoice.invoice_id,
       paymentUrl
     });
@@ -137,6 +137,20 @@ async function route(req, res, body, rawBody) {
     });
 
     verifyShopifyWebhook(req, rawBody);
+
+    if (String(body.tags || "").toLowerCase().includes("custom-checkout")) {
+      console.log("Shopify order webhook skipped for custom checkout completed order", {
+        orderId: body.id,
+        orderName: body.name,
+        tags: body.tags
+      });
+      sendJson(res, 200, {
+        ok: true,
+        skipped: true,
+        reason: "Custom checkout orders are handled by draft completion"
+      });
+      return;
+    }
 
     if (!isQPayShopifyOrder(body)) {
       console.log("Shopify order skipped because payment method is not QPay/manual", {
@@ -599,6 +613,27 @@ function verifyShopifyWebhook(req, rawBody) {
 }
 
 async function updateShopifyAfterPaid(invoice) {
+  if (invoice.shopifyDraftOrderId && !invoice.shopifyOrderId) {
+    try {
+      const completedDraftOrder = await getShopify().completeDraftOrder({
+        draftOrderId: invoice.shopifyDraftOrderId,
+        paymentPending: false
+      });
+      invoice.shopifyOrderId = completedDraftOrder.order_id;
+      invoice.shopifyOrderName = completedDraftOrder.name || invoice.shopifyDraftOrderName;
+      invoice.shopifyTags = completedDraftOrder.tags || invoice.shopifyTags;
+      saveInvoices(invoices);
+      console.log("Shopify draft order completed after QPay payment", {
+        draftOrderId: invoice.shopifyDraftOrderId,
+        shopifyOrderId: invoice.shopifyOrderId,
+        orderName: invoice.shopifyOrderName
+      });
+    } catch (error) {
+      console.error("Failed to complete Shopify draft order after QPay payment", error);
+    }
+    return;
+  }
+
   if (!invoice.shopifyOrderId) {
     return;
   }
