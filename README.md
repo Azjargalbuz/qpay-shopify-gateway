@@ -109,3 +109,44 @@ Order creation
 ```
 
 The endpoint skips orders whose gateway does not match `SHOPIFY_QPAY_GATEWAY_NAMES`.
+
+## Custom Checkout
+
+Hosted checkout URL:
+
+```text
+https://your-payment-domain.mn/checkout?items=<variantId>:<quantity>,<variantId>:<quantity>
+```
+
+Example:
+
+```text
+https://qpay-shopify-gateway.onrender.com/checkout?items=123456789:1,987654321:2
+```
+
+The checkout page creates a pending Shopify order, creates a QPay invoice, stores the payment URL on the Shopify order, and redirects the customer to the QPay QR page.
+
+Set shipping defaults in Render:
+
+```text
+CUSTOM_CHECKOUT_SHIPPING_PRICE=7000
+CUSTOM_CHECKOUT_SHIPPING_TITLE=Delivery
+CUSTOM_CHECKOUT_FREE_SHIPPING_THRESHOLD=0
+```
+
+To redirect the cart checkout button from a Shopify theme, build the `items` query from `/cart.js`:
+
+```html
+<script>
+document.addEventListener("submit", async (event) => {
+  if (!event.target.matches('form[action="/cart"]')) return;
+  const submitter = event.submitter;
+  if (!submitter || !/checkout/i.test(submitter.name + " " + submitter.value + " " + submitter.textContent)) return;
+
+  event.preventDefault();
+  const cart = await fetch("/cart.js").then((response) => response.json());
+  const items = cart.items.map((item) => `${item.variant_id}:${item.quantity}`).join(",");
+  location.href = `https://qpay-shopify-gateway.onrender.com/checkout?items=${encodeURIComponent(items)}`;
+});
+</script>
+```

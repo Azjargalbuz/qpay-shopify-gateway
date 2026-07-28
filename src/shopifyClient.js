@@ -79,6 +79,84 @@ export class ShopifyClient {
     });
   }
 
+  async getCheckoutItems(items) {
+    if (!this.isConfigured()) {
+      throw new Error("Shopify Admin API credentials are not configured");
+    }
+
+    const rows = await Promise.all(items.map(async (item) => {
+      const variantData = await this.request(`/variants/${encodeURIComponent(item.variantId)}.json`);
+      const variant = variantData.variant;
+      let productTitle = "Product";
+      let image = null;
+
+      if (variant?.product_id) {
+        const productData = await this.request(`/products/${encodeURIComponent(variant.product_id)}.json`);
+        productTitle = productData.product?.title || productTitle;
+        image = productData.product?.image?.src || null;
+      }
+
+      const quantity = Number(item.quantity || 1);
+      const price = Number(variant?.price || 0);
+
+      return {
+        variantId: String(item.variantId),
+        productId: variant?.product_id,
+        title: productTitle,
+        variantTitle: variant?.title,
+        image,
+        quantity,
+        price,
+        linePrice: price * quantity
+      };
+    }));
+
+    return rows;
+  }
+
+  async createPendingOrder({
+    email,
+    phone,
+    shippingAddress,
+    items,
+    shippingPrice = 0,
+    shippingTitle = "Delivery"
+  }) {
+    if (!this.isConfigured()) {
+      throw new Error("Shopify Admin API credentials are not configured");
+    }
+
+    const lineItems = items.map((item) => ({
+      variant_id: Number(item.variantId),
+      quantity: Number(item.quantity || 1)
+    }));
+    const tags = "qpay-pending, custom-checkout";
+
+    const orderData = await this.request("/orders.json", {
+      method: "POST",
+      body: {
+        order: {
+          email,
+          phone,
+          line_items: lineItems,
+          shipping_address: shippingAddress,
+          billing_address: shippingAddress,
+          financial_status: "pending",
+          gateway: "QPay",
+          note: "QPay payment pending",
+          tags,
+          send_receipt: false,
+          send_fulfillment_receipt: false,
+          shipping_lines: Number(shippingPrice) > 0
+            ? [{ title: shippingTitle, price: String(shippingPrice), code: "CUSTOM_DELIVERY" }]
+            : []
+        }
+      }
+    });
+
+    return orderData.order;
+  }
+
   async request(path, { method = "GET", body } = {}) {
     const accessToken = await this.getAccessToken();
     const response = await fetch(

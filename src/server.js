@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { QPayClient } from "./qpayClient.js";
 import { ShopifyClient } from "./shopifyClient.js";
+import { checkoutPageHtml } from "./checkoutPage.js";
 
 loadDotEnv();
 
@@ -35,6 +36,93 @@ async function route(req, res, body, rawBody) {
 
   if (req.method === "GET" && path === "/health") {
     sendJson(res, 200, { ok: true });
+    return;
+  }
+
+  if (req.method === "GET" && path === "/checkout") {
+    sendHtml(res, checkoutPageHtml());
+    return;
+  }
+
+  if (req.method === "GET" && path === "/api/custom-checkout/cart") {
+    const items = parseCheckoutItems(url.searchParams.get("items"));
+    const checkoutItems = await getShopify().getCheckoutItems(items);
+    const subtotal = sum(checkoutItems.map((item) => item.linePrice));
+    const shippingPrice = getCustomCheckoutShippingPrice(subtotal);
+
+    sendJson(res, 200, {
+      items: checkoutItems,
+      subtotal,
+      shippingPrice,
+      total: subtotal + shippingPrice
+    });
+    return;
+  }
+
+  if (req.method === "POST" && path === "/api/custom-checkout/orders") {
+    const items = normalizeCheckoutItems(body.items);
+    const subtotalItems = await getShopify().getCheckoutItems(items);
+    const subtotal = sum(subtotalItems.map((item) => item.linePrice));
+    const shippingPrice = getCustomCheckoutShippingPrice(subtotal);
+
+    const shopifyOrder = await getShopify().createPendingOrder({
+      email: body.customer?.email,
+      phone: body.customer?.phone,
+      shippingAddress: body.shippingAddress,
+      items,
+      shippingPrice,
+      shippingTitle: process.env.CUSTOM_CHECKOUT_SHIPPING_TITLE || "Delivery"
+    });
+
+    const orderId = String(shopifyOrder.name || shopifyOrder.order_number || shopifyOrder.id);
+    const amount = Number(shopifyOrder.total_price || subtotal + shippingPrice);
+    const invoice = await getQPay().createInvoice({
+      senderInvoiceNo: orderId,
+      amount,
+      description: `${orderId} custom checkout payment`,
+      receiverCode: "terminal",
+      callbackUrl: process.env.QPAY_CALLBACK_URL
+    });
+    const paymentUrl = buildPaymentUrl(invoice.invoice_id, orderId);
+
+    invoices.set(invoice.invoice_id, {
+      orderId,
+      amount,
+      status: "NEW",
+      qpayInvoiceId: invoice.invoice_id,
+      paymentUrl,
+      qrText: invoice.qr_text,
+      qrImage: invoice.qr_image,
+      urls: invoice.urls ?? [],
+      shopifyOrderId: shopifyOrder.id,
+      shopifyOrderName: shopifyOrder.name,
+      shopifyTags: shopifyOrder.tags,
+      currency: shopifyOrder.currency || "MNT",
+      source: "custom-checkout",
+      createdAt: new Date().toISOString()
+    });
+    saveInvoices(invoices);
+
+    await getShopify().addPaymentUrlToOrder({
+      order: shopifyOrder,
+      paymentUrl
+    });
+
+    console.log("Custom checkout order created", {
+      shopifyOrderId: shopifyOrder.id,
+      orderId,
+      amount,
+      invoiceId: invoice.invoice_id,
+      paymentUrl
+    });
+
+    sendJson(res, 201, {
+      ok: true,
+      orderId,
+      shopifyOrderId: shopifyOrder.id,
+      invoiceId: invoice.invoice_id,
+      paymentUrl
+    });
     return;
   }
 
@@ -413,6 +501,58 @@ function publicInvoice(invoice) {
 
 function findInvoiceByShopifyOrderId(shopifyOrderId) {
   return [...invoices.values()].find((invoice) => invoice.shopifyOrderId === shopifyOrderId);
+}
+
+function parseCheckoutItems(itemsParam) {
+  if (!itemsParam) {
+    const error = new Error("items query parameter is required");
+    error.status = 400;
+    throw error;
+  }
+
+  const items = itemsParam.split(",").map((entry) => {
+    const [variantId, quantity = "1"] = entry.split(":");
+    return {
+      variantId: variantId?.trim(),
+      quantity: Number(quantity)
+    };
+  });
+
+  return normalizeCheckoutItems(items);
+}
+
+function normalizeCheckoutItems(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    const error = new Error("At least one checkout item is required");
+    error.status = 400;
+    throw error;
+  }
+
+  return items.map((item) => {
+    const variantId = String(item.variantId || "").trim();
+    const quantity = Number(item.quantity || 1);
+
+    if (!variantId || !Number.isFinite(quantity) || quantity <= 0) {
+      const error = new Error("Each item requires variantId and positive quantity");
+      error.status = 400;
+      throw error;
+    }
+
+    return { variantId, quantity };
+  });
+}
+
+function getCustomCheckoutShippingPrice(subtotal) {
+  const freeShippingThreshold = Number(process.env.CUSTOM_CHECKOUT_FREE_SHIPPING_THRESHOLD || 0);
+  if (freeShippingThreshold > 0 && subtotal >= freeShippingThreshold) {
+    return 0;
+  }
+
+  return Number(process.env.CUSTOM_CHECKOUT_SHIPPING_PRICE || 0);
+}
+
+function sum(values) {
+  return values.reduce((total, value) => total + Number(value || 0), 0);
 }
 
 function isQPayShopifyOrder(order) {
