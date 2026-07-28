@@ -124,6 +124,11 @@ async function route(req, res, body, rawBody) {
         order: body,
         paymentUrl
       });
+      console.log("Shopify order updated with QPay payment URL", {
+        shopifyOrderId: body.id,
+        orderId,
+        paymentUrl
+      });
     } catch (error) {
       shopifyUpdate = {
         ok: false,

@@ -29,6 +29,7 @@ export class ShopifyClient {
     const noteAttributes = Array.isArray(order.note_attributes) ? order.note_attributes : [];
     const nextNoteAttributes = upsertNoteAttribute(noteAttributes, "QPay payment URL", paymentUrl);
     const tags = appendTag(order.tags, "qpay-pending");
+    const note = appendPaymentUrlToNote(order.note, paymentUrl);
 
     return this.request(`/orders/${order.id}.json`, {
       method: "PUT",
@@ -36,6 +37,7 @@ export class ShopifyClient {
         order: {
           id: order.id,
           note_attributes: nextNoteAttributes,
+          note,
           tags
         }
       }
@@ -163,6 +165,17 @@ function upsertNoteAttribute(noteAttributes, name, value) {
   const next = noteAttributes.filter((item) => item.name !== name);
   next.push({ name, value });
   return next;
+}
+
+function appendPaymentUrlToNote(currentNote, paymentUrl) {
+  const note = String(currentNote || "").trim();
+  const line = `QPay payment URL: ${paymentUrl}`;
+
+  if (note.includes(paymentUrl)) {
+    return note;
+  }
+
+  return note ? `${note}\n${line}` : line;
 }
 
 function appendTag(currentTags = "", tag) {
