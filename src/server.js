@@ -39,9 +39,23 @@ async function route(req, res, body, rawBody) {
   }
 
   if (req.method === "POST" && path === "/api/shopify/orders/create") {
+    console.log("Shopify order webhook received", {
+      shop: req.headers["x-shopify-shop-domain"],
+      topic: req.headers["x-shopify-topic"],
+      apiVersion: req.headers["x-shopify-api-version"],
+      orderId: body.id,
+      orderName: body.name,
+      gateways: [body.gateway, body.payment_gateway_names, body.processing_method].flat().filter(Boolean)
+    });
+
     verifyShopifyWebhook(req, rawBody);
 
     if (!isQPayShopifyOrder(body)) {
+      console.log("Shopify order skipped because payment method is not QPay/manual", {
+        orderId: body.id,
+        orderName: body.name,
+        gateways: [body.gateway, body.payment_gateway_names, body.processing_method].flat().filter(Boolean)
+      });
       sendJson(res, 200, {
         ok: true,
         skipped: true,
@@ -52,6 +66,12 @@ async function route(req, res, body, rawBody) {
 
     const existingInvoice = findInvoiceByShopifyOrderId(body.id);
     if (existingInvoice) {
+      console.log("Shopify order already has QPay invoice", {
+        orderId: body.id,
+        orderName: body.name,
+        invoiceId: existingInvoice.qpayInvoiceId,
+        paymentUrl: existingInvoice.paymentUrl
+      });
       sendJson(res, 200, {
         ok: true,
         duplicate: true,
@@ -72,6 +92,13 @@ async function route(req, res, body, rawBody) {
       callbackUrl: process.env.QPAY_CALLBACK_URL
     });
     const paymentUrl = buildPaymentUrl(invoice.invoice_id, orderId);
+    console.log("QPay invoice created for Shopify order", {
+      shopifyOrderId: body.id,
+      orderId,
+      amount,
+      invoiceId: invoice.invoice_id,
+      paymentUrl
+    });
 
     invoices.set(invoice.invoice_id, {
       orderId,
@@ -178,6 +205,10 @@ async function route(req, res, body, rawBody) {
       localInvoice.paidAt = new Date().toISOString();
       invoices.set(invoiceId, localInvoice);
       saveInvoices(invoices);
+      console.log("QPay invoice marked paid from payment check", {
+        invoiceId,
+        orderId: localInvoice.orderId
+      });
       await updateShopifyAfterPaid(localInvoice);
     }
 
@@ -202,6 +233,7 @@ async function route(req, res, body, rawBody) {
   if (req.method === "POST" && path === "/api/qpay/callback") {
     const paymentId = url.searchParams.get("payment_id") || body.payment_id;
     const invoiceId = url.searchParams.get("invoice_id") || body.invoice_id || body.object_id;
+    console.log("QPay callback received", { invoiceId, paymentId });
 
     if (invoiceId) {
       const payment = await getQPay().checkInvoicePayment(invoiceId);
@@ -214,6 +246,11 @@ async function route(req, res, body, rawBody) {
         localInvoice.paidAt = new Date().toISOString();
         invoices.set(invoiceId, localInvoice);
         saveInvoices(invoices);
+        console.log("QPay invoice marked paid from callback", {
+          invoiceId,
+          orderId: localInvoice.orderId,
+          paymentId: localInvoice.paymentId
+        });
         await updateShopifyAfterPaid(localInvoice);
       }
     }
