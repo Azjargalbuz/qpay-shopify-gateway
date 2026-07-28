@@ -400,6 +400,13 @@ async function route(req, res, body, rawBody) {
     return;
   }
 
+  const thankYouMatch = path.match(/^\/thank-you\/([^/]+)\/([^/]+)$/);
+  if (req.method === "GET" && thankYouMatch) {
+    const [, invoiceId, orderId] = thankYouMatch.map(decodeURIComponent);
+    sendHtml(res, thankYouPageHtml({ invoiceId, orderId }));
+    return;
+  }
+
   sendJson(res, 404, { error: "Not found" });
 }
 
@@ -787,6 +794,12 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
       text-align: center;
       overflow-wrap: anywhere;
     }
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      margin: -6px 0 16px;
+    }
     .actions {
       display: flex;
       gap: 10px;
@@ -842,6 +855,7 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
         </div>
         <div class="amount" id="amount">...</div>
         <div class="qr" id="qr"><span class="loading">QR уншиж байна...</span></div>
+        <p class="hint">Банкны app товчнууд ихэвчлэн тухайн банкны апп суусан гар утсан дээр ажиллана. Компьютер дээр нээгдэхгүй бол QR кодоо банкны апп-аар уншуулна уу.</p>
         <div class="banks" id="banks"></div>
         <div class="actions">
           <button id="check" type="button">Төлбөр шалгах</button>
@@ -859,6 +873,11 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
     const status = document.getElementById("status");
     const panel = document.getElementById("panel");
     const check = document.getElementById("check");
+    let pollCount = 0;
+
+    function thankYouUrl() {
+      return "/thank-you/" + encodeURIComponent(invoiceId) + "/" + encodeURIComponent(orderId);
+    }
 
     async function loadPayment() {
       const response = await fetch("/api/payment-page/" + encodeURIComponent(invoiceId));
@@ -871,6 +890,10 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
       amount.textContent = new Intl.NumberFormat("mn-MN").format(data.amount || 0) + " MNT";
       status.textContent = data.status === "PAID" ? "Төлөгдсөн" : "Хүлээгдэж байна";
       panel.classList.toggle("paid", data.status === "PAID");
+      if (data.status === "PAID") {
+        location.href = thankYouUrl();
+        return;
+      }
 
       if (data.qrImage) {
         const src = data.qrImage.startsWith("data:")
@@ -888,6 +911,8 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
         const link = document.createElement("a");
         link.className = "bank";
         link.href = item.link;
+        link.target = "_blank";
+        link.rel = "noopener";
         link.textContent = item.name || item.description || "Банк";
         banks.appendChild(link);
       }
@@ -903,6 +928,7 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
           status.textContent = "Төлөгдсөн";
           panel.classList.add("paid");
           check.textContent = "Төлөгдсөн";
+          location.href = thankYouUrl();
         } else {
           check.textContent = "Дахин шалгах";
         }
@@ -912,11 +938,127 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
     }
 
     check.addEventListener("click", checkPayment);
+    setInterval(async () => {
+      pollCount += 1;
+      if (pollCount > 60) return;
+      try {
+        const response = await fetch("/api/payment-page/" + encodeURIComponent(invoiceId));
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data.status === "PAID") location.href = thankYouUrl();
+      } catch {}
+    }, 5000);
     loadPayment().catch((error) => {
       amount.textContent = "Олдсонгүй";
       qr.innerHTML = '<span class="loading">' + error.message + '</span>';
     });
   </script>
+</body>
+</html>`;
+}
+
+function thankYouPageHtml({ invoiceId, orderId }) {
+  const safeInvoiceId = escapeHtml(invoiceId);
+  const safeOrderId = escapeHtml(orderId);
+
+  return `<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Төлбөр амжилттай</title>
+  <style>
+    :root {
+      --ink: #172026;
+      --muted: #64717d;
+      --line: #d9e0e6;
+      --green: #168a4a;
+      --bg: #f5f7f9;
+      --blue: #1473e6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .panel {
+      width: min(520px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 34px 28px;
+      text-align: center;
+      box-shadow: 0 14px 40px rgba(23, 32, 38, 0.08);
+    }
+    .mark {
+      width: 64px;
+      height: 64px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 20px;
+      background: #e9f8ef;
+      color: var(--green);
+      font-size: 36px;
+      font-weight: 900;
+    }
+    h1 {
+      margin: 0 0 10px;
+      font-size: 28px;
+    }
+    p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .meta {
+      display: grid;
+      gap: 10px;
+      padding: 16px;
+      margin: 22px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      text-align: left;
+      font-size: 14px;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+    }
+    .row strong {
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+    a {
+      display: inline-block;
+      min-width: 180px;
+      padding: 13px 16px;
+      border-radius: 8px;
+      background: var(--blue);
+      color: #fff;
+      text-decoration: none;
+      font-weight: 800;
+    }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="mark">✓</div>
+    <h1>Төлбөр амжилттай</h1>
+    <p>Таны QPay төлбөр баталгаажлаа. Захиалга Shopify дээр үүсэж, боловсруулагдаж эхэлнэ.</p>
+    <div class="meta">
+      <div class="row"><span>Захиалга</span><strong>${safeOrderId}</strong></div>
+      <div class="row"><span>Нэхэмжлэх</span><strong>${safeInvoiceId}</strong></div>
+    </div>
+    <a href="https://${escapeHtml(process.env.SHOPIFY_SHOP_DOMAIN || "")}">Дэлгүүр рүү буцах</a>
+  </main>
 </body>
 </html>`;
 }
