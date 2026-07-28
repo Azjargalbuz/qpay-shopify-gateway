@@ -2,20 +2,28 @@ export class ShopifyClient {
   constructor({
     shopDomain,
     accessToken,
+    clientId,
+    clientSecret,
     apiVersion = "2026-04"
   }) {
     this.shopDomain = normalizeShopDomain(shopDomain);
     this.accessToken = accessToken;
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
     this.apiVersion = apiVersion;
+    this.tokenExpiresAt = accessToken ? Number.POSITIVE_INFINITY : 0;
   }
 
   isConfigured() {
-    return Boolean(this.shopDomain && this.accessToken);
+    return Boolean(
+      this.shopDomain &&
+      (this.accessToken || (this.clientId && this.clientSecret))
+    );
   }
 
   async addPaymentUrlToOrder({ order, paymentUrl }) {
     if (!this.isConfigured()) {
-      return { skipped: true, reason: "SHOPIFY_SHOP_DOMAIN or SHOPIFY_ADMIN_ACCESS_TOKEN is not configured" };
+      return { skipped: true, reason: "Shopify Admin API credentials are not configured" };
     }
 
     const noteAttributes = Array.isArray(order.note_attributes) ? order.note_attributes : [];
@@ -36,7 +44,7 @@ export class ShopifyClient {
 
   async markOrderPaid({ orderId, amount, currency = "MNT" }) {
     if (!this.isConfigured()) {
-      return { skipped: true, reason: "SHOPIFY_SHOP_DOMAIN or SHOPIFY_ADMIN_ACCESS_TOKEN is not configured" };
+      return { skipped: true, reason: "Shopify Admin API credentials are not configured" };
     }
 
     return this.request(`/orders/${orderId}/transactions.json`, {
@@ -55,7 +63,7 @@ export class ShopifyClient {
 
   async tagOrderPaid(order) {
     if (!this.isConfigured()) {
-      return { skipped: true, reason: "SHOPIFY_SHOP_DOMAIN or SHOPIFY_ADMIN_ACCESS_TOKEN is not configured" };
+      return { skipped: true, reason: "Shopify Admin API credentials are not configured" };
     }
 
     return this.request(`/orders/${order.shopifyOrderId}.json`, {
@@ -70,13 +78,14 @@ export class ShopifyClient {
   }
 
   async request(path, { method = "GET", body } = {}) {
+    const accessToken = await this.getAccessToken();
     const response = await fetch(
       `https://${this.shopDomain}/admin/api/${this.apiVersion}${path}`,
       {
         method,
         headers: {
           "Content-Type": "application/json",
-          "X-Shopify-Access-Token": this.accessToken
+          "X-Shopify-Access-Token": accessToken
         },
         body: body ? JSON.stringify(body) : undefined
       }
@@ -93,6 +102,50 @@ export class ShopifyClient {
     }
 
     return data;
+  }
+
+  async getAccessToken() {
+    if (this.accessToken && Date.now() < this.tokenExpiresAt) {
+      return this.accessToken;
+    }
+
+    if (!this.clientId || !this.clientSecret) {
+      throw new Error("SHOPIFY_ADMIN_ACCESS_TOKEN or SHOPIFY_CLIENT_ID/SHOPIFY_CLIENT_SECRET is required");
+    }
+
+    const form = new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: this.clientId,
+      client_secret: this.clientSecret
+    });
+
+    const response = await fetch(`https://${this.shopDomain}/admin/oauth/access_token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: form
+    });
+
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+
+    if (!response.ok) {
+      const error = new Error(data.error_description || data.error || `Shopify token request failed with ${response.status}`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+
+    this.accessToken = data.access_token;
+    const expiresInMs = Number(data.expires_in ?? 86399) * 1000;
+    this.tokenExpiresAt = Date.now() + expiresInMs - 60_000;
+
+    if (!this.accessToken) {
+      throw new Error("Shopify did not return access_token");
+    }
+
+    return this.accessToken;
   }
 }
 

@@ -315,6 +315,8 @@ function getShopify() {
     shopify = new ShopifyClient({
       shopDomain: process.env.SHOPIFY_SHOP_DOMAIN,
       accessToken: process.env.SHOPIFY_ADMIN_ACCESS_TOKEN,
+      clientId: process.env.SHOPIFY_CLIENT_ID,
+      clientSecret: process.env.SHOPIFY_CLIENT_SECRET,
       apiVersion: process.env.SHOPIFY_API_VERSION
     });
   }

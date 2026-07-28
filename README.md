@@ -82,14 +82,17 @@ Set these Shopify values in `.env`:
 
 ```text
 SHOPIFY_SHOP_DOMAIN=your-store.myshopify.com
-SHOPIFY_ADMIN_ACCESS_TOKEN=shpat_or_custom_app_token
+SHOPIFY_CLIENT_ID=your_shopify_app_client_id
+SHOPIFY_CLIENT_SECRET=your_shopify_app_client_secret
 SHOPIFY_WEBHOOK_SECRET=your_shopify_webhook_secret
-SHOPIFY_API_VERSION=2026-04
+SHOPIFY_API_VERSION=2026-07
 SHOPIFY_QPAY_GATEWAY_NAMES=qpay,manual
 SHOPIFY_MARK_PAID=false
 ```
 
-`SHOPIFY_WEBHOOK_SECRET` enables HMAC validation for Shopify webhooks. `SHOPIFY_ADMIN_ACCESS_TOKEN` lets this service write the `QPay payment URL` note attribute and `qpay-pending` tag back to the Shopify order.
+`SHOPIFY_WEBHOOK_SECRET` enables HMAC validation for Shopify webhooks. `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET` let this service request Shopify Admin API tokens automatically with the client credentials grant, then write the `QPay payment URL` note attribute and `qpay-pending` tag back to the Shopify order.
+
+If you have a legacy admin-created custom app token, you can use `SHOPIFY_ADMIN_ACCESS_TOKEN` instead of `SHOPIFY_CLIENT_ID` and `SHOPIFY_CLIENT_SECRET`.
 
 Keep `SHOPIFY_MARK_PAID=false` until you test transaction creation on your store. When enabled, the QPay callback/payment check attempts to create a successful Shopify transaction and tags the order `qpay-paid`.
 
