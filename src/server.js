@@ -4,6 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { QPayClient } from "./qpayClient.js";
 import { ShopifyClient } from "./shopifyClient.js";
 import { checkoutPageHtml } from "./checkoutPage.js";
+import { HipayClient } from "./hipayClient.js";
 
 loadDotEnv();
 
@@ -11,6 +12,7 @@ const port = Number(process.env.PORT || 4001);
 const publicBaseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${port}`;
 let qpay;
 let shopify;
+let hipay;
 const invoices = loadInvoices();
 
 const server = createServer(async (req, res) => {
@@ -41,6 +43,47 @@ async function route(req, res, body, rawBody) {
 
   if (req.method === "GET" && path === "/checkout") {
     sendHtml(res, checkoutPageHtml());
+    return;
+  }
+
+  const hipayPayMatch = path.match(/^\/hipay\/pay\/([^/]+)$/);
+  if (req.method === "GET" && hipayPayMatch) {
+    const invoiceId = decodeURIComponent(hipayPayMatch[1]);
+    const invoice = invoices.get(invoiceId);
+    if (!invoice) {
+      sendHtml(res, hipayLaunchPageHtml({ error: "Payment invoice not found" }));
+      return;
+    }
+
+    const hipayCheckout = await ensureHipayCheckout(invoice);
+    sendHtml(res, hipayLaunchPageHtml({
+      orderId: invoice.orderId,
+      amount: invoice.amount,
+      checkoutId: hipayCheckout.checkoutId,
+      deeplink: hipayCheckout.deeplink,
+      paymentUrl: hipayCheckout.paymentUrl
+    }));
+    return;
+  }
+
+  if ((req.method === "GET" || req.method === "POST") && (path === "/api/hipay/callback" || path === "/api/hipay/redirect")) {
+    const checkoutId = url.searchParams.get("checkoutId") || body.checkoutId;
+    const paymentId = url.searchParams.get("paymentId") || body.paymentId;
+    console.log("HiPay callback received", { checkoutId, paymentId, path });
+
+    if (checkoutId) {
+      await markHipayPaid({ checkoutId, paymentId });
+    }
+
+    if (path === "/api/hipay/redirect" && checkoutId) {
+      const invoice = findInvoiceByHipayCheckoutId(checkoutId);
+      if (invoice) {
+        sendHtml(res, redirectHtml(`/thank-you/${encodeURIComponent(invoice.qpayInvoiceId)}/${encodeURIComponent(invoice.orderId)}`));
+        return;
+      }
+    }
+
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -438,6 +481,20 @@ function getShopify() {
   return shopify;
 }
 
+function getHipay() {
+  if (!hipay) {
+    hipay = new HipayClient({
+      baseUrl: process.env.HIPAY_BASE_URL || "https://test.hipay.mn",
+      clientId: process.env.HIPAY_CLIENT_ID,
+      clientSecret: process.env.HIPAY_CLIENT_SECRET,
+      redirectUrl: process.env.HIPAY_REDIRECT_URL || `${publicBaseUrl.replace(/\/$/, "")}/api/hipay/redirect`,
+      webhookUrl: process.env.HIPAY_WEBHOOK_URL || `${publicBaseUrl.replace(/\/$/, "")}/api/hipay/callback`
+    });
+  }
+
+  return hipay;
+}
+
 function parseRequestBody(req) {
   return new Promise((resolve, reject) => {
     if (!["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
@@ -456,9 +513,15 @@ function parseRequestBody(req) {
       }
 
       try {
+        const contentType = String(req.headers["content-type"] || "");
+        if (contentType.includes("application/x-www-form-urlencoded")) {
+          resolve({ body: Object.fromEntries(new URLSearchParams(raw)), rawBody: raw });
+          return;
+        }
+
         resolve({ body: JSON.parse(raw), rawBody: raw });
       } catch {
-        const error = new Error("Invalid JSON body");
+        const error = new Error("Invalid request body");
         error.status = 400;
         reject(error);
       }
@@ -522,6 +585,85 @@ function publicInvoice(invoice) {
 
 function findInvoiceByShopifyOrderId(shopifyOrderId) {
   return [...invoices.values()].find((invoice) => invoice.shopifyOrderId === shopifyOrderId);
+}
+
+function findInvoiceByHipayCheckoutId(checkoutId) {
+  return [...invoices.values()].find((invoice) => invoice.hipayCheckoutId === checkoutId);
+}
+
+async function ensureHipayCheckout(invoice) {
+  if (invoice.hipayCheckoutId) {
+    return {
+      checkoutId: invoice.hipayCheckoutId,
+      deeplink: invoice.hipayDeeplink,
+      paymentUrl: invoice.hipayPaymentUrl
+    };
+  }
+
+  const checkout = await getHipay().createCheckout({
+    amount: invoice.amount,
+    items: [{
+      itemno: String(invoice.orderId).slice(0, 32),
+      name: `Order ${invoice.orderId}`,
+      price: Number(invoice.amount),
+      quantity: 1,
+      measure: "ш"
+    }]
+  });
+  const checkoutId = checkout.checkoutId;
+  const paymentUrl = getHipay().paymentFormUrl({ checkoutId });
+  const deeplink = getHipay().deeplink(checkoutId);
+
+  invoice.hipayCheckoutId = checkoutId;
+  invoice.hipayPaymentUrl = paymentUrl;
+  invoice.hipayDeeplink = deeplink;
+  invoice.hipayStatus = "NEW";
+  invoices.set(invoice.qpayInvoiceId, invoice);
+  saveInvoices(invoices);
+
+  console.log("HiPay checkout created", {
+    orderId: invoice.orderId,
+    invoiceId: invoice.qpayInvoiceId,
+    checkoutId,
+    paymentUrl
+  });
+
+  return { checkoutId, paymentUrl, deeplink };
+}
+
+async function markHipayPaid({ checkoutId, paymentId }) {
+  const invoice = findInvoiceByHipayCheckoutId(checkoutId);
+  if (!invoice) {
+    console.warn("HiPay callback checkoutId not found", { checkoutId, paymentId });
+    return;
+  }
+
+  const status = await getHipay().getCheckout(checkoutId);
+  const isPaid = String(status.status || "").toLowerCase().startsWith("paid");
+  if (!isPaid) {
+    invoice.hipayStatus = status.status || "UNKNOWN";
+    invoices.set(invoice.qpayInvoiceId, invoice);
+    saveInvoices(invoices);
+    console.log("HiPay checkout is not paid yet", { checkoutId, status: invoice.hipayStatus });
+    return;
+  }
+
+  invoice.status = "PAID";
+  invoice.hipayStatus = status.status;
+  invoice.hipayPaymentId = paymentId || status.paymentId;
+  invoice.hipayPaymentType = status.paymentType;
+  invoice.paidAt = new Date().toISOString();
+  invoices.set(invoice.qpayInvoiceId, invoice);
+  saveInvoices(invoices);
+
+  console.log("HiPay invoice marked paid", {
+    checkoutId,
+    invoiceId: invoice.qpayInvoiceId,
+    orderId: invoice.orderId,
+    paymentId: invoice.hipayPaymentId
+  });
+
+  await updateShopifyAfterPaid(invoice);
 }
 
 function parseCheckoutItems(itemsParam) {
@@ -910,10 +1052,13 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
       for (const item of data.urls || []) {
         const link = document.createElement("a");
         link.className = "bank";
-        link.href = item.link;
+        const label = item.name || item.description || "Банк";
+        link.href = label.toLowerCase().includes("hipay")
+          ? "/hipay/pay/" + encodeURIComponent(invoiceId)
+          : item.link;
         link.target = "_blank";
         link.rel = "noopener";
-        link.textContent = item.name || item.description || "Банк";
+        link.textContent = label;
         banks.appendChild(link);
       }
     }
@@ -955,6 +1100,90 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
   </script>
 </body>
 </html>`;
+}
+
+function hipayLaunchPageHtml({ orderId, amount, checkoutId, deeplink, paymentUrl, error }) {
+  if (error) {
+    return `<!doctype html><html lang="mn"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HiPay</title></head><body><p>${escapeHtml(error)}</p></body></html>`;
+  }
+
+  return `<!doctype html>
+<html lang="mn">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HiPay руу шилжиж байна</title>
+  <style>
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: #f5f7f9;
+      color: #172026;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .panel {
+      width: min(480px, 100%);
+      background: #fff;
+      border: 1px solid #d9e0e6;
+      border-radius: 8px;
+      padding: 28px;
+      text-align: center;
+      box-shadow: 0 14px 40px rgba(23, 32, 38, 0.08);
+    }
+    h1 { margin: 0 0 10px; font-size: 24px; }
+    p { margin: 0 0 18px; color: #64717d; line-height: 1.5; }
+    .meta {
+      display: grid;
+      gap: 8px;
+      margin: 18px 0;
+      padding: 14px;
+      border: 1px solid #d9e0e6;
+      border-radius: 8px;
+      text-align: left;
+      font-size: 14px;
+    }
+    .row { display: flex; justify-content: space-between; gap: 12px; }
+    a {
+      display: block;
+      padding: 13px 16px;
+      border-radius: 8px;
+      text-decoration: none;
+      font-weight: 800;
+      margin-top: 10px;
+    }
+    .primary { background: #1473e6; color: #fff; }
+    .secondary { background: #edf4ff; color: #0757b8; }
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <h1>HiPay руу шилжиж байна</h1>
+    <p>Хэрэв HiPay app автоматаар нээгдэхгүй бол доорх товчийг дарна уу.</p>
+    <div class="meta">
+      <div class="row"><span>Захиалга</span><strong>${escapeHtml(orderId)}</strong></div>
+      <div class="row"><span>Дүн</span><strong>${escapeHtml(new Intl.NumberFormat("mn-MN").format(Number(amount || 0)))} MNT</strong></div>
+      <div class="row"><span>HiPay checkout</span><strong>${escapeHtml(checkoutId)}</strong></div>
+    </div>
+    <a class="primary" href="${escapeHtml(deeplink)}">HiPay app нээх</a>
+    <a class="secondary" href="${escapeHtml(paymentUrl)}">Web payment page нээх</a>
+  </main>
+  <script>
+    const deeplink = ${JSON.stringify(deeplink)};
+    const paymentUrl = ${JSON.stringify(paymentUrl)};
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      location.href = deeplink;
+      setTimeout(() => { location.href = paymentUrl; }, 1400);
+    }
+  </script>
+</body>
+</html>`;
+}
+
+function redirectHtml(path) {
+  return `<!doctype html><html lang="mn"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0; url=${escapeHtml(path)}"><script>location.href=${JSON.stringify(path)}</script></head><body></body></html>`;
 }
 
 function thankYouPageHtml({ invoiceId, orderId }) {

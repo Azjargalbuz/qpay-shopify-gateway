@@ -156,3 +156,24 @@ document.addEventListener("submit", async (event) => {
 });
 </script>
 ```
+
+## HiPay
+
+HiPay can be opened from the payment page's `Hipay` button. The service creates a HiPay checkout for the same Shopify draft order amount and sends the customer to the HiPay app/web payment form.
+
+Render environment variables:
+
+```text
+HIPAY_BASE_URL=https://test.hipay.mn
+HIPAY_CLIENT_ID=sunbeam1
+HIPAY_CLIENT_SECRET=...
+HIPAY_REDIRECT_URL=https://qpay-shopify-gateway.onrender.com/api/hipay/redirect
+HIPAY_WEBHOOK_URL=https://qpay-shopify-gateway.onrender.com/api/hipay/callback
+```
+
+HiPay docs used:
+
+- Create invoice: https://developers.hipay.mn/checkout/
+- Payment form: https://developers.hipay.mn/payment/
+- Payment webhook: https://developers.hipay.mn/response-webhook/
+- Deeplink: https://developers.hipay.mn/payment-deeplink/
