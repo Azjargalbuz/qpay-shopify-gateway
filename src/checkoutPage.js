@@ -186,7 +186,7 @@ export function checkoutPageHtml() {
         <div class="shipping">
           <div>
             <strong>Энгийн</strong>
-            <span class="muted">48 цагийн дотор хүргэгдэнэ</span>
+            <span class="muted">24-48 цагийн дотор хүргэгдэнэ</span>
           </div>
           <strong id="shipping-price">...</strong>
         </div>
@@ -216,7 +216,10 @@ export function checkoutPageHtml() {
   <script>
     const params = new URLSearchParams(location.search);
     const itemsParam = params.get("items") || "";
-    const formatMoney = (amount) => new Intl.NumberFormat("mn-MN").format(Number(amount || 0)) + " MNT";
+    const formatMoney = (amount) => {
+      const value = Number(amount || 0);
+      return value === 0 ? "ҮНЭГҮЙ" : new Intl.NumberFormat("mn-MN").format(value) + " MNT";
+    };
     let checkoutItems = [];
     let shippingPrice = 0;
 
