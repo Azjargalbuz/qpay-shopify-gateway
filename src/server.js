@@ -117,7 +117,7 @@ async function route(req, res, body, rawBody) {
       shippingTitle: process.env.CUSTOM_CHECKOUT_SHIPPING_TITLE || "Delivery"
     });
 
-    const orderId = String(draftOrder.name || draftOrder.id);
+    const orderId = buildStoreOrderId(draftOrder.name || draftOrder.id);
     const amount = Number(draftOrder.total_price || subtotal + shippingPrice);
     const invoice = await getQPay().createInvoice({
       senderInvoiceNo: orderId,
@@ -226,7 +226,7 @@ async function route(req, res, body, rawBody) {
       return;
     }
 
-    const orderId = String(body.name || body.order_number || body.id);
+    const orderId = buildStoreOrderId(body.name || body.order_number || body.id);
     const amount = Number(body.total_price);
     const description = `${orderId} Shopify order payment`;
     const invoice = await getQPay().createInvoice({
@@ -567,6 +567,17 @@ function loadDotEnv() {
 
 function buildPaymentUrl(invoiceId, orderId) {
   return `${publicBaseUrl.replace(/\/$/, "")}/merchant_1/${encodeURIComponent(invoiceId)}/${encodeURIComponent(orderId)}`;
+}
+
+function buildStoreOrderId(orderId) {
+  const normalizedOrderId = String(orderId);
+  const prefix = String(process.env.STORE_PREFIX || "").trim();
+
+  if (!prefix || normalizedOrderId.startsWith(`${prefix}-`)) {
+    return normalizedOrderId;
+  }
+
+  return `${prefix}-${normalizedOrderId}`;
 }
 
 function publicInvoice(invoice) {

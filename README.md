@@ -16,8 +16,11 @@ Fill `.env` with credentials from QPay:
 - `QPAY_INVOICE_CODE`
 - `QPAY_CALLBACK_URL`
 - `PUBLIC_BASE_URL`
+- `STORE_PREFIX`
 
 QPay's official developer docs describe OAuth credentials, sandbox token endpoint, invoice creation, callback URL, and payment check endpoints at https://developer.qpay.mn/.
+
+`STORE_PREFIX` is optional, but recommended when you run the same gateway code for more than one Shopify store. It keeps QPay/HiPay invoice identifiers unique, for example `SUNBEAM-#1113` and `STORE2-#1113`.
 
 ## Create Invoice
 
@@ -177,3 +180,35 @@ HiPay docs used:
 - Payment form: https://developers.hipay.mn/payment/
 - Payment webhook: https://developers.hipay.mn/response-webhook/
 - Deeplink: https://developers.hipay.mn/payment-deeplink/
+
+## Multiple Stores
+
+The simplest multi-store setup is one Render Web Service per Shopify store, all connected to the same GitHub repository.
+
+Example:
+
+```text
+qpay-shopify-gateway-sunbeam
+qpay-shopify-gateway-store2
+```
+
+Each Render service must have its own environment variables:
+
+```text
+PUBLIC_BASE_URL=https://store2-gateway.onrender.com
+STORE_PREFIX=STORE2
+SHOPIFY_SHOP_DOMAIN=second-store.myshopify.com
+SHOPIFY_CLIENT_ID=...
+SHOPIFY_CLIENT_SECRET=...
+QPAY_CLIENT_ID=...
+QPAY_CLIENT_SECRET=...
+QPAY_INVOICE_CODE=...
+HIPAY_CLIENT_ID=...
+HIPAY_CLIENT_SECRET=...
+```
+
+Then configure the second Shopify theme checkout redirect to use that second Render URL:
+
+```text
+https://store2-gateway.onrender.com/checkout?items=...
+```
