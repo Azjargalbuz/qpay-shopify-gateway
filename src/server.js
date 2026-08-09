@@ -1292,7 +1292,7 @@ function thankYouPageHtml({ invoiceId, orderId }) {
   <main class="panel">
     <div class="mark">✓</div>
     <h1>Төлбөр амжилттай</h1>
-    <p>Таны QPay төлбөр баталгаажлаа. Захиалга Shopify дээр үүсэж, боловсруулагдаж эхэлнэ.</p>
+    <p>Таны төлбөр төлөгдөж захиалга баталгаажлаа. БАЯРЛАЛАА</p>
     <div class="meta">
       <div class="row"><span>Захиалга</span><strong>${safeOrderId}</strong></div>
       <div class="row"><span>Нэхэмжлэх</span><strong>${safeInvoiceId}</strong></div>
