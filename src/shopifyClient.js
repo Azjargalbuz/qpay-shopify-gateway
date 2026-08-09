@@ -203,7 +203,7 @@ export class ShopifyClient {
     );
 
     const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
+    const data = parseShopifyJson(text, response);
 
     if (!response.ok) {
       const error = new Error(data.errors || `Shopify request failed with ${response.status}`);
@@ -239,7 +239,7 @@ export class ShopifyClient {
     });
 
     const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
+    const data = parseShopifyJson(text, response);
 
     if (!response.ok) {
       const error = new Error(data.error_description || data.error || `Shopify token request failed with ${response.status}`);
@@ -268,6 +268,24 @@ function normalizeShopDomain(shopDomain) {
   return shopDomain
     .replace(/^https?:\/\//, "")
     .replace(/\/$/, "");
+}
+
+function parseShopifyJson(text, response) {
+  if (!text) {
+    return {};
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    const error = new Error(`Shopify returned non-JSON response with ${response.status}`);
+    error.status = response.status;
+    error.data = {
+      contentType: response.headers.get("content-type"),
+      bodyStart: text.slice(0, 240)
+    };
+    throw error;
+  }
 }
 
 function upsertNoteAttribute(noteAttributes, name, value) {
