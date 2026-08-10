@@ -1074,9 +1074,12 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
       }
     }
 
-    async function checkPayment() {
-      check.disabled = true;
-      check.textContent = "Шалгаж байна...";
+    async function checkPayment(options = {}) {
+      const silent = options.silent === true;
+      if (!silent) {
+        check.disabled = true;
+        check.textContent = "Шалгаж байна...";
+      }
       try {
         const response = await fetch("/api/qpay/invoices/" + encodeURIComponent(invoiceId) + "/check", { method: "POST" });
         const data = await response.json();
@@ -1085,11 +1088,13 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
           panel.classList.add("paid");
           check.textContent = "Төлөгдсөн";
           location.href = thankYouUrl();
-        } else {
+        } else if (!silent) {
           check.textContent = "Дахин шалгах";
         }
       } finally {
-        check.disabled = false;
+        if (!silent) {
+          check.disabled = false;
+        }
       }
     }
 
@@ -1098,10 +1103,7 @@ function paymentPageHtml({ merchant, invoiceId, orderId }) {
       pollCount += 1;
       if (pollCount > 60) return;
       try {
-        const response = await fetch("/api/payment-page/" + encodeURIComponent(invoiceId));
-        if (!response.ok) return;
-        const data = await response.json();
-        if (data.status === "PAID") location.href = thankYouUrl();
+        await checkPayment({ silent: true });
       } catch {}
     }, 5000);
     loadPayment().catch((error) => {
