@@ -11,6 +11,7 @@ export class ShopifyClient {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
     this.apiVersion = apiVersion;
+    this.staticAccessToken = Boolean(accessToken);
     this.tokenExpiresAt = accessToken ? Number.POSITIVE_INFINITY : 0;
   }
 
@@ -190,6 +191,26 @@ export class ShopifyClient {
 
   async request(path, { method = "GET", body } = {}) {
     const accessToken = await this.getAccessToken();
+    let result = await this.performRequest(path, { method, body, accessToken });
+
+    if ((result.response.status === 401 || result.response.status === 403) && !this.staticAccessToken) {
+      this.accessToken = null;
+      this.tokenExpiresAt = 0;
+      const freshAccessToken = await this.getAccessToken();
+      result = await this.performRequest(path, { method, body, accessToken: freshAccessToken });
+    }
+
+    if (!result.response.ok) {
+      const error = new Error(result.data.errors || `Shopify request failed with ${result.response.status}`);
+      error.status = result.response.status;
+      error.data = result.data;
+      throw error;
+    }
+
+    return result.data;
+  }
+
+  async performRequest(path, { method, body, accessToken }) {
     const response = await fetch(
       `https://${this.shopDomain}/admin/api/${this.apiVersion}${path}`,
       {
@@ -205,14 +226,7 @@ export class ShopifyClient {
     const text = await response.text();
     const data = parseShopifyJson(text, response);
 
-    if (!response.ok) {
-      const error = new Error(data.errors || `Shopify request failed with ${response.status}`);
-      error.status = response.status;
-      error.data = data;
-      throw error;
-    }
-
-    return data;
+    return { response, data };
   }
 
   async getAccessToken() {
