@@ -30,6 +30,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, () => {
   console.log(`QPay gateway listening on http://localhost:${port}`);
+  logRuntimeConfig();
 });
 
 async function route(req, res, body, rawBody) {
@@ -465,6 +466,35 @@ function getQPay() {
   }
 
   return qpay;
+}
+
+function logRuntimeConfig() {
+  console.log("Runtime config", {
+    publicBaseUrl,
+    storePrefix: process.env.STORE_PREFIX || "",
+    qpay: {
+      env: String(process.env.QPAY_ENV || "").trim(),
+      clientId: describeSecret(process.env.QPAY_CLIENT_ID),
+      clientSecret: describeSecret(process.env.QPAY_CLIENT_SECRET),
+      invoiceCode: describeSecret(process.env.QPAY_INVOICE_CODE),
+      callbackUrl: process.env.QPAY_CALLBACK_URL || ""
+    },
+    shopify: {
+      shopDomain: process.env.SHOPIFY_SHOP_DOMAIN || "",
+      clientId: describeSecret(process.env.SHOPIFY_CLIENT_ID),
+      clientSecret: describeSecret(process.env.SHOPIFY_CLIENT_SECRET),
+      hasAdminAccessToken: Boolean(process.env.SHOPIFY_ADMIN_ACCESS_TOKEN)
+    }
+  });
+}
+
+function describeSecret(value) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return { set: false, length: 0 };
+  }
+
+  return { set: true, length: text.length };
 }
 
 function getShopify() {
