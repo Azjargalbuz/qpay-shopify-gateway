@@ -11,14 +11,19 @@ export class QPayClient {
     invoiceCode,
     callbackUrl
   }) {
-    if (!clientId || !clientSecret || !invoiceCode) {
+    const qpayEnv = normalizeQPayEnv(env);
+    const qpayClientId = cleanCredential(clientId);
+    const qpayClientSecret = cleanCredential(clientSecret);
+    const qpayInvoiceCode = cleanCredential(invoiceCode);
+
+    if (!qpayClientId || !qpayClientSecret || !qpayInvoiceCode) {
       throw new Error("QPAY_CLIENT_ID, QPAY_CLIENT_SECRET, and QPAY_INVOICE_CODE are required");
     }
 
-    this.baseUrl = BASE_URLS[env] ?? BASE_URLS.sandbox;
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
-    this.invoiceCode = invoiceCode;
+    this.baseUrl = BASE_URLS[qpayEnv] ?? BASE_URLS.sandbox;
+    this.clientId = qpayClientId;
+    this.clientSecret = qpayClientSecret;
+    this.invoiceCode = qpayInvoiceCode;
     this.callbackUrl = callbackUrl;
     this.token = null;
     this.refreshToken = null;
@@ -168,4 +173,12 @@ async function parseQPayResponse(response) {
 
 function basicAuth(username, password) {
   return Buffer.from(`${username}:${password}`).toString("base64");
+}
+
+function normalizeQPayEnv(env) {
+  return String(env || "sandbox").trim().toLowerCase();
+}
+
+function cleanCredential(value) {
+  return String(value || "").trim();
 }
