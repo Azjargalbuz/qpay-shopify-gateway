@@ -21,6 +21,7 @@ export class QPayClient {
     }
 
     this.baseUrl = BASE_URLS[qpayEnv] ?? BASE_URLS.sandbox;
+    this.env = qpayEnv;
     this.clientId = qpayClientId;
     this.clientSecret = qpayClientSecret;
     this.invoiceCode = qpayInvoiceCode;
@@ -86,7 +87,24 @@ export class QPayClient {
 
   async request(path, { method = "GET", body } = {}) {
     const token = await this.getAccessToken();
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    let response = await this.performRequest(path, { method, body, token });
+
+    if (response.status === 401) {
+      this.clearToken();
+      const freshToken = await this.getAccessToken();
+      response = await this.performRequest(path, { method, body, token: freshToken });
+    }
+
+    return parseQPayResponse(response, {
+      env: this.env,
+      path,
+      clientIdLength: this.clientId.length,
+      invoiceCodeLength: this.invoiceCode.length
+    });
+  }
+
+  async performRequest(path, { method, body, token }) {
+    return fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -94,8 +112,6 @@ export class QPayClient {
       },
       body: body ? JSON.stringify(body) : undefined
     });
-
-    return parseQPayResponse(response);
   }
 
   async getAccessToken() {
@@ -108,9 +124,7 @@ export class QPayClient {
         await this.refreshAccessToken();
         return this.token;
       } catch {
-        this.token = null;
-        this.refreshToken = null;
-        this.tokenExpiresAt = 0;
+        this.clearToken();
       }
     }
 
@@ -127,7 +141,12 @@ export class QPayClient {
       }
     });
 
-    const data = await parseQPayResponse(response);
+    const data = await parseQPayResponse(response, {
+      env: this.env,
+      path: "/auth/token",
+      clientIdLength: this.clientId.length,
+      invoiceCodeLength: this.invoiceCode.length
+    });
     this.setTokenData(data);
   }
 
@@ -140,7 +159,12 @@ export class QPayClient {
       }
     });
 
-    const data = await parseQPayResponse(response);
+    const data = await parseQPayResponse(response, {
+      env: this.env,
+      path: "/auth/refresh",
+      clientIdLength: this.clientId.length,
+      invoiceCodeLength: this.invoiceCode.length
+    });
     this.setTokenData(data);
   }
 
@@ -154,9 +178,15 @@ export class QPayClient {
       throw new Error("QPay did not return access_token");
     }
   }
+
+  clearToken() {
+    this.token = null;
+    this.refreshToken = null;
+    this.tokenExpiresAt = 0;
+  }
 }
 
-async function parseQPayResponse(response) {
+async function parseQPayResponse(response, context = {}) {
   const text = await response.text();
   const data = text ? JSON.parse(text) : {};
 
@@ -164,7 +194,7 @@ async function parseQPayResponse(response) {
     const message = data.message || data.error || `QPay request failed with ${response.status}`;
     const error = new Error(message);
     error.status = response.status;
-    error.data = data;
+    error.data = { ...data, context };
     throw error;
   }
 
