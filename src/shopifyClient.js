@@ -179,9 +179,9 @@ export class ShopifyClient {
           billing_address: shippingAddress,
           note: `QPay payment pending${phone ? `\nPhone: ${phone}` : ""}`,
           tags,
-          shipping_lines: Number(shippingPrice) > 0
-            ? [{ title: shippingTitle, price: String(shippingPrice), code: "CUSTOM_DELIVERY" }]
-            : []
+          shipping_line: Number(shippingPrice) > 0
+            ? { title: shippingTitle, price: String(shippingPrice), custom: true }
+            : undefined
         }
       }
     });

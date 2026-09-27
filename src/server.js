@@ -119,7 +119,9 @@ async function route(req, res, body, rawBody) {
     });
 
     const orderId = buildStoreOrderId(draftOrder.name || draftOrder.id);
-    const amount = Number(draftOrder.total_price || subtotal + shippingPrice);
+    // Charge the same total shown on the hosted checkout. Shopify's draft order
+    // response must not be allowed to silently drop the custom shipping charge.
+    const amount = subtotal + shippingPrice;
     const invoice = await getQPay().createInvoice({
       senderInvoiceNo: orderId,
       amount,
