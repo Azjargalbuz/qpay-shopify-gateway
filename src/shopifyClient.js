@@ -151,23 +151,20 @@ export class ShopifyClient {
     return data.draft_order;
   }
 
-  async findDraftOrderByQPayInvoiceId(invoiceId) {
+  async findDraftOrderByQPayInvoiceId(invoiceId, draftOrderId) {
     if (!this.isConfigured()) {
       throw new Error("Shopify Admin API credentials are not configured");
     }
 
+    if (draftOrderId) {
+      const data = await this.request(`/draft_orders/${encodeURIComponent(draftOrderId)}.json`);
+      const draftOrder = data.draft_order;
+      return draftOrderContainsInvoice(draftOrder, invoiceId) ? draftOrder : null;
+    }
+
     const data = await this.request("/draft_orders.json?status=any&limit=250");
     const draftOrders = Array.isArray(data.draft_orders) ? data.draft_orders : [];
-
-    return draftOrders.find((draftOrder) => {
-      const attributeValues = Array.isArray(draftOrder.note_attributes)
-        ? draftOrder.note_attributes.map((attribute) => attribute.value)
-        : [];
-      const searchableText = [...attributeValues, draftOrder.note]
-        .filter(Boolean)
-        .join(" ");
-      return searchableText.includes(invoiceId);
-    }) || null;
+    return draftOrders.find((draftOrder) => draftOrderContainsInvoice(draftOrder, invoiceId)) || null;
   }
 
   async createDraftOrder({
@@ -291,6 +288,20 @@ export class ShopifyClient {
 
     return this.accessToken;
   }
+}
+
+function draftOrderContainsInvoice(draftOrder, invoiceId) {
+  if (!draftOrder) {
+    return false;
+  }
+
+  const attributeValues = Array.isArray(draftOrder.note_attributes)
+    ? draftOrder.note_attributes.map((attribute) => attribute.value)
+    : [];
+  const searchableText = [...attributeValues, draftOrder.note]
+    .filter(Boolean)
+    .join(" ");
+  return searchableText.includes(invoiceId);
 }
 
 function normalizeShopDomain(shopDomain) {

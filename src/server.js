@@ -349,10 +349,11 @@ async function route(req, res, body, rawBody) {
   const checkMatch = path.match(/^\/api\/qpay\/invoices\/([^/]+)\/check$/);
   if (req.method === "POST" && checkMatch) {
     const invoiceId = checkMatch[1];
+    const recoveryDraftOrderId = url.searchParams.get("draft_order_id");
     const payment = await getQPay().checkInvoicePayment(invoiceId);
     const paid = payment.rows?.some((row) => row.payment_status === "PAID") ?? false;
 
-    const localInvoice = await findOrRecoverInvoice(invoiceId);
+    const localInvoice = await findOrRecoverInvoice(invoiceId, recoveryDraftOrderId);
     if (localInvoice && paid) {
       localInvoice.status = "PAID";
       localInvoice.paidAt = new Date().toISOString();
@@ -369,7 +370,9 @@ async function route(req, res, body, rawBody) {
       paid,
       paidAmount: payment.paid_amount,
       count: payment.count,
-      rows: payment.rows ?? []
+      rows: payment.rows ?? [],
+      shopifyOrderId: localInvoice?.shopifyOrderId,
+      shopifyOrderName: localInvoice?.shopifyOrderName
     });
     return;
   }
@@ -886,13 +889,13 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
   return { ok: true, processed: true };
 }
 
-async function findOrRecoverInvoice(invoiceId) {
+async function findOrRecoverInvoice(invoiceId, draftOrderId) {
   const existingInvoice = invoices.get(invoiceId);
   if (existingInvoice) {
     return existingInvoice;
   }
 
-  const draftOrder = await getShopify().findDraftOrderByQPayInvoiceId(invoiceId);
+  const draftOrder = await getShopify().findDraftOrderByQPayInvoiceId(invoiceId, draftOrderId);
   if (!draftOrder) {
     return null;
   }
