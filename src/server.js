@@ -383,32 +383,15 @@ async function route(req, res, body, rawBody) {
     return;
   }
 
-  if (req.method === "POST" && path === "/api/qpay/callback") {
-    const paymentId = url.searchParams.get("payment_id") || body.payment_id;
-    const invoiceId = url.searchParams.get("invoice_id") || body.invoice_id || body.object_id;
-    console.log("QPay callback received", { invoiceId, paymentId });
-
-    if (invoiceId) {
-      const payment = await getQPay().checkInvoicePayment(invoiceId);
-      const paid = payment.rows?.some((row) => row.payment_status === "PAID") ?? false;
-      const localInvoice = invoices.get(invoiceId);
-
-      if (localInvoice && paid) {
-        localInvoice.status = "PAID";
-        localInvoice.paymentId = paymentId ?? payment.rows?.[0]?.payment_id;
-        localInvoice.paidAt = new Date().toISOString();
-        invoices.set(invoiceId, localInvoice);
-        saveInvoices(invoices);
-        console.log("QPay invoice marked paid from callback", {
-          invoiceId,
-          orderId: localInvoice.orderId,
-          paymentId: localInvoice.paymentId
-        });
-        await updateShopifyAfterPaid(localInvoice);
-      }
-    }
-
-    sendJson(res, 200, { ok: true });
+  if ((req.method === "GET" || req.method === "POST") && path === "/api/qpay/callback") {
+    const paymentId = url.searchParams.get("payment_id") || body.payment_id || body.paymentId;
+    const invoiceId = url.searchParams.get("invoice_id")
+      || body.invoice_id
+      || body.invoiceId
+      || body.object_id
+      || body.objectId;
+    const result = await handleQPayCallback({ invoiceId, paymentId, method: req.method });
+    sendJson(res, 200, result);
     return;
   }
 
@@ -843,6 +826,64 @@ async function updateShopifyAfterPaid(invoice) {
   } catch (error) {
     console.error("Failed to update Shopify order after QPay payment", error);
   }
+}
+
+async function handleQPayCallback({ invoiceId, paymentId, method }) {
+  let resolvedInvoiceId = invoiceId;
+  console.log("QPay callback received", { invoiceId, paymentId, method });
+
+  if (!resolvedInvoiceId && paymentId) {
+    const paymentDetails = await getQPay().getPayment(paymentId);
+    resolvedInvoiceId = paymentDetails.object_id
+      || paymentDetails.payment_object_id
+      || paymentDetails.invoice_id;
+    console.log("QPay callback invoice resolved from payment", {
+      paymentId,
+      invoiceId: resolvedInvoiceId
+    });
+  }
+
+  if (!resolvedInvoiceId) {
+    console.warn("QPay callback did not include a usable invoice identifier", {
+      paymentId,
+      method
+    });
+    return { ok: true, processed: false };
+  }
+
+  const payment = await getQPay().checkInvoicePayment(resolvedInvoiceId);
+  const paidRow = payment.rows?.find((row) => row.payment_status === "PAID");
+  const localInvoice = invoices.get(resolvedInvoiceId);
+
+  if (!localInvoice) {
+    console.warn("QPay callback invoice was not found locally", {
+      invoiceId: resolvedInvoiceId,
+      paymentId
+    });
+    return { ok: true, processed: false };
+  }
+
+  if (!paidRow) {
+    console.log("QPay callback payment is not paid yet", {
+      invoiceId: resolvedInvoiceId,
+      paymentId
+    });
+    return { ok: true, processed: false };
+  }
+
+  localInvoice.status = "PAID";
+  localInvoice.paymentId = paymentId || paidRow.payment_id;
+  localInvoice.paidAt ||= new Date().toISOString();
+  invoices.set(resolvedInvoiceId, localInvoice);
+  saveInvoices(invoices);
+  console.log("QPay invoice marked paid from callback", {
+    invoiceId: resolvedInvoiceId,
+    orderId: localInvoice.orderId,
+    paymentId: localInvoice.paymentId
+  });
+  await updateShopifyAfterPaid(localInvoice);
+
+  return { ok: true, processed: true };
 }
 
 function loadInvoices() {
