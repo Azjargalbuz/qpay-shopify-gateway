@@ -352,7 +352,7 @@ async function route(req, res, body, rawBody) {
     const payment = await getQPay().checkInvoicePayment(invoiceId);
     const paid = payment.rows?.some((row) => row.payment_status === "PAID") ?? false;
 
-    const localInvoice = invoices.get(invoiceId);
+    const localInvoice = await findOrRecoverInvoice(invoiceId);
     if (localInvoice && paid) {
       localInvoice.status = "PAID";
       localInvoice.paidAt = new Date().toISOString();
@@ -853,7 +853,7 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
 
   const payment = await getQPay().checkInvoicePayment(resolvedInvoiceId);
   const paidRow = payment.rows?.find((row) => row.payment_status === "PAID");
-  const localInvoice = invoices.get(resolvedInvoiceId);
+  const localInvoice = await findOrRecoverInvoice(resolvedInvoiceId);
 
   if (!localInvoice) {
     console.warn("QPay callback invoice was not found locally", {
@@ -884,6 +884,41 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
   await updateShopifyAfterPaid(localInvoice);
 
   return { ok: true, processed: true };
+}
+
+async function findOrRecoverInvoice(invoiceId) {
+  const existingInvoice = invoices.get(invoiceId);
+  if (existingInvoice) {
+    return existingInvoice;
+  }
+
+  const draftOrder = await getShopify().findDraftOrderByQPayInvoiceId(invoiceId);
+  if (!draftOrder) {
+    return null;
+  }
+
+  const recoveredInvoice = {
+    orderId: buildStoreOrderId(draftOrder.name || draftOrder.id),
+    amount: Number(draftOrder.total_price || 0),
+    status: "NEW",
+    qpayInvoiceId: invoiceId,
+    paymentUrl: buildPaymentUrl(invoiceId, buildStoreOrderId(draftOrder.name || draftOrder.id)),
+    shopifyDraftOrderId: draftOrder.id,
+    shopifyDraftOrderName: draftOrder.name,
+    shopifyTags: draftOrder.tags,
+    currency: draftOrder.currency || "MNT",
+    source: "shopify-draft-recovery",
+    createdAt: draftOrder.created_at || new Date().toISOString()
+  };
+
+  invoices.set(invoiceId, recoveredInvoice);
+  saveInvoices(invoices);
+  console.log("Recovered QPay invoice from Shopify draft order", {
+    invoiceId,
+    orderId: recoveredInvoice.orderId,
+    shopifyDraftOrderId: recoveredInvoice.shopifyDraftOrderId
+  });
+  return recoveredInvoice;
 }
 
 function loadInvoices() {

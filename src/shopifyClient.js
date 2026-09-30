@@ -151,6 +151,25 @@ export class ShopifyClient {
     return data.draft_order;
   }
 
+  async findDraftOrderByQPayInvoiceId(invoiceId) {
+    if (!this.isConfigured()) {
+      throw new Error("Shopify Admin API credentials are not configured");
+    }
+
+    const data = await this.request("/draft_orders.json?status=open&limit=250");
+    const draftOrders = Array.isArray(data.draft_orders) ? data.draft_orders : [];
+
+    return draftOrders.find((draftOrder) => {
+      const paymentUrlAttribute = draftOrder.note_attributes?.find(
+        (attribute) => attribute.name === "QPay payment URL"
+      );
+      const searchableText = [paymentUrlAttribute?.value, draftOrder.note]
+        .filter(Boolean)
+        .join(" ");
+      return searchableText.includes(invoiceId);
+    }) || null;
+  }
+
   async createDraftOrder({
     email,
     phone,
