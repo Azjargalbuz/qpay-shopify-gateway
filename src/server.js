@@ -906,6 +906,7 @@ async function findOrRecoverInvoice(invoiceId) {
     shopifyDraftOrderId: draftOrder.id,
     shopifyDraftOrderName: draftOrder.name,
     shopifyTags: draftOrder.tags,
+    shopifyOrderId: draftOrder.order_id || undefined,
     currency: draftOrder.currency || "MNT",
     source: "shopify-draft-recovery",
     createdAt: draftOrder.created_at || new Date().toISOString()
