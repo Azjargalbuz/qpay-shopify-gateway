@@ -151,14 +151,22 @@ export class ShopifyClient {
     return data.draft_order;
   }
 
+  async getDraftOrder(draftOrderId) {
+    if (!this.isConfigured()) {
+      throw new Error("Shopify Admin API credentials are not configured");
+    }
+
+    const data = await this.request(`/draft_orders/${encodeURIComponent(draftOrderId)}.json`);
+    return data.draft_order;
+  }
+
   async findDraftOrderByQPayInvoiceId(invoiceId, draftOrderId) {
     if (!this.isConfigured()) {
       throw new Error("Shopify Admin API credentials are not configured");
     }
 
     if (draftOrderId) {
-      const data = await this.request(`/draft_orders/${encodeURIComponent(draftOrderId)}.json`);
-      const draftOrder = data.draft_order;
+      const draftOrder = await this.getDraftOrder(draftOrderId);
       return draftOrderContainsInvoice(draftOrder, invoiceId) ? draftOrder : null;
     }
 

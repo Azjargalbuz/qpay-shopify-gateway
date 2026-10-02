@@ -122,12 +122,15 @@ async function route(req, res, body, rawBody) {
     // Charge the same total shown on the hosted checkout. Shopify's draft order
     // response must not be allowed to silently drop the custom shipping charge.
     const amount = subtotal + shippingPrice;
+    const callbackUrl = buildQPayCallbackUrl({
+      draftOrderId: draftOrder.id
+    });
     const invoice = await getQPay().createInvoice({
       senderInvoiceNo: orderId,
       amount,
       description: `${orderId} custom checkout draft payment`,
       receiverCode: "terminal",
-      callbackUrl: process.env.QPAY_CALLBACK_URL
+      callbackUrl
     });
     const paymentUrl = buildPaymentUrl(invoice.invoice_id, orderId);
 
@@ -388,12 +391,20 @@ async function route(req, res, body, rawBody) {
 
   if ((req.method === "GET" || req.method === "POST") && path === "/api/qpay/callback") {
     const paymentId = url.searchParams.get("payment_id") || body.payment_id || body.paymentId;
+    const draftOrderId = url.searchParams.get("draft_order_id")
+      || body.draft_order_id
+      || body.draftOrderId;
     const invoiceId = url.searchParams.get("invoice_id")
       || body.invoice_id
       || body.invoiceId
       || body.object_id
       || body.objectId;
-    const result = await handleQPayCallback({ invoiceId, paymentId, method: req.method });
+    const result = await handleQPayCallback({
+      invoiceId,
+      paymentId,
+      draftOrderId,
+      method: req.method
+    });
     sendJson(res, 200, result);
     return;
   }
@@ -831,9 +842,9 @@ async function updateShopifyAfterPaid(invoice) {
   }
 }
 
-async function handleQPayCallback({ invoiceId, paymentId, method }) {
+async function handleQPayCallback({ invoiceId, paymentId, draftOrderId, method }) {
   let resolvedInvoiceId = invoiceId;
-  console.log("QPay callback received", { invoiceId, paymentId, method });
+  console.log("QPay callback received", { invoiceId, paymentId, draftOrderId, method });
 
   if (!resolvedInvoiceId && paymentId) {
     const paymentDetails = await getQPay().getPayment(paymentId);
@@ -842,6 +853,15 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
       || paymentDetails.invoice_id;
     console.log("QPay callback invoice resolved from payment", {
       paymentId,
+      invoiceId: resolvedInvoiceId
+    });
+  }
+
+  if (!resolvedInvoiceId && draftOrderId) {
+    const draftOrder = await getShopify().getDraftOrder(draftOrderId);
+    resolvedInvoiceId = getQPayInvoiceIdFromDraftOrder(draftOrder);
+    console.log("QPay callback invoice resolved from Shopify draft", {
+      draftOrderId,
       invoiceId: resolvedInvoiceId
     });
   }
@@ -856,7 +876,7 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
 
   const payment = await getQPay().checkInvoicePayment(resolvedInvoiceId);
   const paidRow = payment.rows?.find((row) => row.payment_status === "PAID");
-  const localInvoice = await findOrRecoverInvoice(resolvedInvoiceId);
+  const localInvoice = await findOrRecoverInvoice(resolvedInvoiceId, draftOrderId);
 
   if (!localInvoice) {
     console.warn("QPay callback invoice was not found locally", {
@@ -887,6 +907,29 @@ async function handleQPayCallback({ invoiceId, paymentId, method }) {
   await updateShopifyAfterPaid(localInvoice);
 
   return { ok: true, processed: true };
+}
+
+function buildQPayCallbackUrl({ draftOrderId } = {}) {
+  const callbackUrl = process.env.QPAY_CALLBACK_URL
+    || `${publicBaseUrl.replace(/\/$/, "")}/api/qpay/callback`;
+  const url = new URL(callbackUrl);
+
+  if (draftOrderId) {
+    url.searchParams.set("draft_order_id", String(draftOrderId));
+  }
+
+  return url.toString();
+}
+
+function getQPayInvoiceIdFromDraftOrder(draftOrder) {
+  const attributeValues = Array.isArray(draftOrder?.note_attributes)
+    ? draftOrder.note_attributes.map((attribute) => attribute.value)
+    : [];
+  const searchableText = [...attributeValues, draftOrder?.note]
+    .filter(Boolean)
+    .join(" ");
+  const match = searchableText.match(/\/merchant_[^/\s]+\/([^/\s]+)\//);
+  return match ? decodeURIComponent(match[1]) : undefined;
 }
 
 async function findOrRecoverInvoice(invoiceId, draftOrderId) {
